@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 # Copyright 2020, Boling Consulting Solutions
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -12,6 +13,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
--r ../requirements.txt
+# TODO: Run tests that require root privileges here..
 
-twisted == 20.3.0
+if __name__ == '__main__':
+    print('TODO: I do not do much right now')
+

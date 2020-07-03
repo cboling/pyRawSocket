@@ -52,6 +52,11 @@ class Main(object):
             print('.', end='', flush=True)
             _d = yield asleep(1)
 
+        # Get some info on interface
+
+        # Open interface
+
+
         main.stop()
 
         print('Opening interface {}'.format(self.interface))

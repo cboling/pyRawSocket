@@ -18,25 +18,13 @@ SHELL = bash -eu -o pipefail
 include setup.mk
 
 # Variables
-VERSION                  ?= $(shell cat ../VERSION)
-
-## Python venv dev/test/examples environment
-VENVDIR 	:= venv
-TESTVENVDIR := ${VENVDIR}-tests
-EXVENVDIR   := ${VENVDIR}-examples
-VENV_BIN 	?= virtualenv
-VENV_OPTS 	?= --python=python3.6 -v
-
-# Parallel Build
-$(DIRS):
-	@echo "    MK $@"
-	$(Q)$(MAKE) -C $@
-
-# Parallel Flake8
-DIRS_FLAKE8 = $(addsuffix .flake8,$(DIRS))
-$(DIRS_FLAKE8):
-	@echo "    FLAKE8 $(basename $@)"
-	-$(Q)$(MAKE) -C $(basename $@) flake8
+VERSION           ?= $(shell cat ../VERSION)
+DOCKER_BUILD_ARGS := --rm --force-rm
+VENVDIR           := venv
+TESTVENVDIR       := ${VENVDIR}-tests
+EXVENVDIR         := ${VENVDIR}-examples
+VENV_BIN          ?= virtualenv
+VENV_OPTS         ?= --python=python3.6 -v
 
 # ignore these directories
 .PHONY: test dist examples
@@ -111,14 +99,18 @@ venv-test:
 #	@ echo "Executing unit tests w/tox"
 #	tox
 
-test: clean # venv-test
+test: clean run-as-root-tests  # venv-test
 	@ echo "Executing all unit tests"
 	@ . ${TESTVENVDIR}/bin/activate && echo "TODO: $(MAKE)"
+
+run-as-root-docker:
+	@ docker build $(DOCKER_BUILD_ARGS) -t test-as-root:latest -f Dockerfile.run-as-root .
+
+run-as-root-tests: # run-as-root-docker
+	docker run -i --rm -v ${PWD}:/pyrawtest --privileged test-as-root:latest env PYTHONPATH=/pyrawtest python /pyrawtest/test/test_as_root.py
 
 lint: clean # venv
 	@ echo "Executing all unit tests"
 	@ . ${VENVDIR}/bin/activate && echo "TODO: $(MAKE)"
-
-flake8: $(DIRS_FLAKE8)
 
 # end file
