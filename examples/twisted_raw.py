@@ -14,17 +14,36 @@
 # limitations under the License.
 
 import os
-import time
-import types
 import sys
 import socketserver
-import configparser
 
 from twisted.internet.defer import inlineCallbacks, returnValue, Deferred
-from twisted.internet.task import LoopingCall
-from zope.interface import implementer
 from twisted.internet import reactor
-from ..rawsocket.iothread import IOThread
+from rawsocket.iothread import IOThread
+
+try:
+    import sys
+    REMOTE_DBG_HOST = '192.168.0.216'
+
+    # sys.path.append('/voltha/voltha/pydevd/pydevd-pycharm.egg')
+    import pydevd_pycharm
+    # Initial breakpoint
+    pydevd_pycharm.settrace(REMOTE_DBG_HOST, port=5678, stdoutToServer=True, stderrToServer=True, suspend=False)
+
+except ImportError:
+    print('Error importing pydevd package.')
+    print('REMOTE DEBUGGING will not be supported in this run...')
+    # Continue on, you do not want to completely kill VOLTHA, you just need to fix it.
+
+except AttributeError:
+    print('Attribute error. Perhaps try to explicitly set PYTHONPATH to'
+          'pydevd directory and run again?')
+    print('REMOTE DEBUGGING will not be supported in this run...')
+    # Continue on, you do not want to completely kill VOLTHA, you just need to fix it.
+
+except:
+    print("pydevd startup exception: %s" % sys.exc_info()[0])
+    print('REMOTE DEBUGGING will not be supported in this run...')
 
 
 def asleep(dt):
@@ -40,44 +59,49 @@ def asleep(dt):
 
 class Main(object):
     def __init__(self):
-        self.interface = 'en0'
+        self.interface = 'eth0'
         self.io_thread = IOThread()
-        self.src_mac = None
 
     @inlineCallbacks
     def big_loop(self):
         # pause before listening (make sure this works)
-        print('\nSpinning wheels for 5 seconds')
-        for tick in range(5):
+        print('\nSpinning wheels for 3 seconds so we know visually we are at least running')
+        for tick in range(3):
             print('.', end='', flush=True)
             _d = yield asleep(1)
 
         # Get some info on interface
 
         # Open interface
-
-
-        main.stop()
+        # self.io_thread.start()    #  optional as open below starts it if needed
 
         print('Opening interface {}'.format(self.interface))
-        self.mgmt.open(self.interface, self.olt_mac)
+        self.io_thread.open(self.interface)
 
-        print(os.linesep + 'Big loop exiting, stoping reactor')
+        _x = yield asleep(10)
+        _x = yield asleep(10)
+        _x = yield asleep(10)
+
+        self.stop()
+
+        print(os.linesep + 'Big loop exiting, stopping reactor')
         reactor.stop()
 
     def start(self):
         print('Starting background thread')
         reactor.addSystemEventTrigger('before', 'shutdown', self.stop)
-        self.mgmt.start()
-
         reactor.callWhenRunning(self.big_loop)
         return self
 
+    @inlineCallbacks
     def stop(self):
         print('Stopping background thread')
-        mgmt, self.mgmt = self.mgmt, None
-        if mgmt is not None:
-            mgmt.stop()
+
+        io_thread, self.io_thread = self.io_thread, None
+        if io_thread is not None:
+            reactor.callFromThread(io_thread.stop, 0.2)
+
+        returnValue(io_thread)
 
 
 if __name__ == '__main__':

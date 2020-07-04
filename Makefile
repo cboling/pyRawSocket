@@ -75,6 +75,12 @@ clean:
 distclean: clean
 	@ -rm -rf ${VENVDIR} ${EXVENVDIR} ${TESTVENVDIR}
 
+docker:
+	@ docker build $(DOCKER_BUILD_ARGS) -t pyrawsocket:latest -f Dockerfile .
+
+run-as-root: # pipdocker
+	docker run -i --rm -v ${PWD}:/pyrawsocket --privileged pyrawsocket:latest env PYTHONPATH=/pyrawsocket python /pyrawsocket/examples/twisted_raw.py
+
 ######################################################################
 # Example venv support
 
