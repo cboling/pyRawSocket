@@ -30,18 +30,10 @@ class IOThread(Thread):
         self._port = None
         self._cvar = Condition()
         self._waker = _SelectWakerDescriptor()
-        self._rx_queue = None
         self._rx_callback = None
 
-        # Statistics
-        self._rx_frames = 0
-        self._rx_octets = 0
-        self._rx_discards = 0
-        self._tx_frames = 0
-        self._tx_octets = 0
-        self._tx_errors = 0
-
     def __del__(self):
+        self._rx_callback = None
         self.stop()
 
     def __str__(self):
@@ -55,13 +47,15 @@ class IOThread(Thread):
     def is_running(self):
         return not self.stopped and self.is_alive()
 
-    def open(self, iface, bpf=None):
+    def open(self, iface, rx_callback, filter=None):
         assert self._port is None, 'Interface already Opened'
 
-        self._port = IOPort.create(iface)
-        if bpf is not None:
+        if filter is not None:
             print('BPF not supported at this time')
             pass
+
+        self._rx_callback = rx_callback
+        self._port = IOPort.create(iface, rx_callback, verbose=self._verbose)
 
         # devices = pcapy.findalldevs()
         # self._port = pcapy.open_live(iface, 1600, 1, 10)
@@ -140,39 +134,39 @@ class IOThread(Thread):
             time.sleep(0.010)
 
         port = self._port
-        if port is not None:
-            sockets = [self._waker, port]
+        sockets = [self._waker, port]
 
-            while not self._stopped:
-                empty = []
-                try:
-                    _in, _out, _err = select.select(sockets, empty, empty, 10000)  #TODO: Reduce timeout to 1
+        while not self._stopped and self._port is not None:
+            empty = []
+            try:
+                # TODO: What is best timeout?
+                _in, _out, _err = select.select(sockets, empty, empty, 10)  # TODO: Reduce timeout to 1
 
-                except Exception as _e:
-                    break
+            except Exception as _e:
+                break
 
-                with self._cvar:
-                    for port in _in:
-                        if port is self._waker:
+            with self._cvar:
+                for fd in _in:
+                    try:
+                        if fd is self._waker:
                             self._waker.wait()
                             continue
-                        else:
-                            port.recv()
 
-                    self._cvar.notify_all()
+                        elif fd is port:
+                            port.recv()
+                        else:
+                            pass    # Stale port or waker, may be shutting down
+
+                        self._cvar.notify_all()
+
+                    except Exception as _e:
+                        pass
 
         if self._verbose:
             print(os.linesep + 'exiting background I/O thread', flush=True)
 
     def statistics(self):
-        return {
-            'rx_frames': self._rx_frames,
-            'rx_octets': self._rx_octets,
-            'rx_discards': self._rx_discards,
-            'tx_frames': self._tx_frames,
-            'tx_octets': self._tx_octets,
-            'tx_errors': self._tx_errors,
-        }
+        return self._port.statistics() if self._port is not None else None
 
 
 class _SelectWakerDescriptor(object):

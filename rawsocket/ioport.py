@@ -29,9 +29,11 @@ class IOPort(object):
     RCV_TIMEOUT = 10000
     MIN_PKT_SIZE = 60
 
-    def __init__(self, iface_name, filter=None):
+    def __init__(self, iface_name, rx_callback, filter=None, verbose=False):
         self.iface_name = iface_name
-        self.filter = filter
+        self._filter = filter
+        self._rx_callback = rx_callback
+        self._verbose = verbose
 
         # Statistics
         self._rx_frames = 0
@@ -40,6 +42,11 @@ class IOPort(object):
         self._tx_frames = 0
         self._tx_octets = 0
         self._tx_errors = 0
+
+        # Following are just for debugging and will be removed
+        self._destination_macs = set()
+        self._source_macs = set()
+        self._ether_types = set()
 
         # Open the raw socket
         try:
@@ -50,20 +57,22 @@ class IOPort(object):
             raise
 
     @staticmethod
-    def create(iface_name):
-        return _IOPort(iface_name)
+    def create(iface_name, rx_callback, filter=None, verbose=False):
+        return _IOPort(iface_name, rx_callback, filter=filter, verbose=verbose)
 
     def _open_socket(self, iface_name, filter):
         raise NotImplementedError('to be implemented by derived class')
 
-    def rcv_frame(self):
+    def _rcv_frame(self):
         raise NotImplementedError('to be implemented by derived class')
 
     def __del__(self):
         self.close()
             
     def close(self):
+        self._rx_callback = None
         sock, self._socket = self._socket, None
+
         if sock is not None:
             try:
                 sock.close()
@@ -74,36 +83,33 @@ class IOPort(object):
     def fileno(self):
         return self._socket.fileno()
 
-    def _dispatch(self, proxy, frame):
-        try:
-            proxy.callback(proxy, frame)
-
-        except Exception as _e:
-            pass
-            raise
-
     def recv(self):
         """Called on the select thread when a packet arrives"""
         try:
-            frame = self.rcv_frame()
-            _str_frame = frame.hex()
+            # Get the frame from the O/S Specific Layer
+            frame = self._rcv_frame()
+            callback = self._rx_callback
+
+            if callback is not None:
+                self._rx_frames += 1
+                self._rx_octets += len(frame)
+                callback(frame)
+
+            else:
+                self._rx_discards += 1
+
+            # Following is for debug only
+            from scapy.layers.l2 import Ether
+            eth_hdr = Ether(frame)
+            self._source_macs.add(eth_hdr.src)
+            self._destination_macs.add(eth_hdr.dst)
+            self._ether_types.add(eth_hdr.type)
 
         except RuntimeError as _e:
             # we observed this happens sometimes right after the _socket was
             # attached to a newly created veth interface. So we log it, but
             # allow to continue.
             return
-
-        self._rx_frames += 1
-        dispatched = False
-
-        # for proxy in self.proxies:
-        #     if proxy.filter is None or proxy.filter(frame):
-        #         dispatched = True
-        #         # reactor.callFromThread(self._dispatch, proxy, frame)
-
-        if not dispatched:
-            self._rx_discards += 1
 
     def send(self, frame):
         sent_bytes = self.send_frame(frame)
@@ -143,6 +149,11 @@ class IOPort(object):
             'tx_frames': self._tx_frames,
             'tx_octets': self._tx_octets,
             'tx_errors': self._tx_errors,
+
+            # Following are just for debugging and will be removed
+            'destination_macs': self._destination_macs,
+            'source_macs': self._source_macs,
+            'etypes': self._ether_types,
         }
 
 
@@ -171,7 +182,7 @@ if sys.platform == 'darwin':
 
             return sin
 
-        def rcv_frame(self):
+        def _rcv_frame(self):
             pkt = next(self._socket)
             if pkt is not None:
                 ts, pkt = pkt
@@ -208,7 +219,7 @@ elif sys.platform.startswith('linux'):
                 pass
                 raise
 
-        def rcv_frame(self):
+        def _rcv_frame(self):
             return recv(self._socket, self.RCV_SIZE_DEFAULT)
 
         def up(self):

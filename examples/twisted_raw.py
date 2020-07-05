@@ -18,7 +18,7 @@ import sys
 import socketserver
 
 from twisted.internet.defer import inlineCallbacks, returnValue, Deferred
-from twisted.internet import reactor
+from twisted.internet import reactor, threads
 from rawsocket.iothread import IOThread
 
 try:
@@ -60,7 +60,7 @@ def asleep(dt):
 class Main(object):
     def __init__(self):
         self.interface = 'eth0'
-        self.io_thread = IOThread()
+        self.io_thread = IOThread(verbose=True)
 
     @inlineCallbacks
     def big_loop(self):
@@ -75,20 +75,21 @@ class Main(object):
         # Open interface
         # self.io_thread.start()    #  optional as open below starts it if needed
 
-        print('Opening interface {}'.format(self.interface))
-        self.io_thread.open(self.interface)
+        bpf = None
 
-        _x = yield asleep(10)
-        _x = yield asleep(10)
+        print(os.linesep + 'Opening interface {}'.format(self.interface), flush=True)
+        reactor.callInThread(self.io_thread.open, self.interface, self.rx_callback)
+
+        print('sleeping 10 seconds', flush=True)
         _x = yield asleep(10)
 
+        print('stopping', flush=True)
         self.stop()
 
         print(os.linesep + 'Big loop exiting, stopping reactor')
         reactor.stop()
 
     def start(self):
-        print('Starting background thread')
         reactor.addSystemEventTrigger('before', 'shutdown', self.stop)
         reactor.callWhenRunning(self.big_loop)
         return self
@@ -99,9 +100,61 @@ class Main(object):
 
         io_thread, self.io_thread = self.io_thread, None
         if io_thread is not None:
-            reactor.callFromThread(io_thread.stop, 0.2)
+            import pprint
+            pp = pprint.PrettyPrinter(indent=4,)
+            stats = io_thread.statistics()
+
+            print('Statistics:')
+            pp.pprint(stats)
+
+            try:
+                # may block during brief join
+                _d = yield threads.deferToThread(io_thread.stop, 0.2)
+
+            except Exception as _e:
+                pass
 
         returnValue(io_thread)
+
+    @inlineCallbacks
+    def send(self, frame):
+        if self.io_thread is None:
+            returnValue(-1)
+
+        try:
+            # Not sure if it will block or not, just to be safe
+            print('Sending {} bytes'.format(len(frame)))
+
+            bytes_sent = yield reactor.deferToThread(self.io_thread.send, frame)
+
+            print('Tx success: {} bytes'.format(bytes_sent))
+            returnValue(bytes_sent)
+
+        except Exception as _e:
+            returnValue(-2)
+
+    def _rcv_io(self, frame):
+        from scapy.layers.l2 import Ether, Dot1Q
+
+        # Decode the received frame
+        _str_frame = frame.hex()
+        response = Ether(frame)
+
+        if response.haslayer(Dot1Q):
+            first_layer_info = response.getlayer(Dot1Q)
+            # print(first_layer_info)
+
+        # print(response)
+
+    def rx_callback(self, frame):
+        """
+        Rx Callback
+
+        This is called from the IOThread and schedules the rx on the reactor thread
+
+        :param frame:
+        """
+        reactor.callFromThread(self._rcv_io, frame)
 
 
 if __name__ == '__main__':
