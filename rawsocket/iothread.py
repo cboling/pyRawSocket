@@ -223,3 +223,6 @@ class BpfProgramFilter(object):
 
     def __str__(self):
         return self._program_string
+
+    def get_bpf(self):
+        return self._bpf.get_bpf()
