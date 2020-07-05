@@ -47,15 +47,16 @@ class IOThread(Thread):
     def is_running(self):
         return not self.stopped and self.is_alive()
 
-    def open(self, iface, rx_callback, filter=None):
+    def open(self, iface, rx_callback, bpf_filter=None):
         assert self._port is None, 'Interface already Opened'
 
-        if filter is not None:
-            print('BPF not supported at this time')
+        if bpf_filter is not None:
+            print("TODO: Support compile BPF")  # TODO: Compile and install filter in kernel if possible
+            print("BFP is: '{}'".format(bpf_filter))
             pass
 
         self._rx_callback = rx_callback
-        self._port = IOPort.create(iface, rx_callback, verbose=self._verbose)
+        self._port = IOPort.create(iface, rx_callback, bpf_filter=bpf_filter, verbose=self._verbose)
 
         # devices = pcapy.findalldevs()
         # self._port = pcapy.open_live(iface, 1600, 1, 10)
@@ -194,3 +195,31 @@ class _SelectWakerDescriptor(object):
 
         except Exception as e:
             pass
+
+
+class BpfProgramFilter(object):
+    """
+    Convenience packet filter based on the well-tried Berkeley Packet Filter,
+    used by many well known open source tools such as pcap and tcpdump.
+    """
+    def __init__(self, program_string):
+        """
+        Create a filter using the BPF command syntax. To learn more,
+        consult 'man pcap-filter'.
+        :param program_string: The textual definition of the filter. Examples:
+        'vlan 1000'
+        'vlan 1000 and ip src host 10.10.10.10'
+        """
+        self._program_string = program_string
+        self._bpf = pcapy.BPFProgram(program_string)
+
+    def __call__(self, frame):
+        """
+        Return 1 if frame passes filter.
+        :param frame: Raw frame provided as Python string
+        :return: 1 if frame satisfies filter, 0 otherwise.
+        """
+        return self._bpf.filter(frame)
+
+    def __str__(self):
+        return self._program_string

@@ -29,9 +29,9 @@ class IOPort(object):
     RCV_TIMEOUT = 10000
     MIN_PKT_SIZE = 60
 
-    def __init__(self, iface_name, rx_callback, filter=None, verbose=False):
+    def __init__(self, iface_name, rx_callback, bpf_filter=None, verbose=False):
         self.iface_name = iface_name
-        self._filter = filter
+        self._filter = bpf_filter
         self._rx_callback = rx_callback
         self._verbose = verbose
 
@@ -57,8 +57,8 @@ class IOPort(object):
             raise
 
     @staticmethod
-    def create(iface_name, rx_callback, filter=None, verbose=False):
-        return _IOPort(iface_name, rx_callback, filter=filter, verbose=verbose)
+    def create(iface_name, rx_callback, bpf_filter=None, verbose=False):
+        return _IOPort(iface_name, rx_callback, bpf_filter=bpf_filter, verbose=verbose)
 
     def _open_socket(self, iface_name, filter):
         raise NotImplementedError('to be implemented by derived class')
@@ -90,20 +90,20 @@ class IOPort(object):
             frame = self._rcv_frame()
             callback = self._rx_callback
 
-            if callback is not None:
+            if callback is None or (self._filter is not None and self._filter(frame) == 0):
+                self._rx_discards += 1
+
+            else:
                 self._rx_frames += 1
                 self._rx_octets += len(frame)
                 callback(frame)
 
-            else:
-                self._rx_discards += 1
-
-            # Following is for debug only
-            from scapy.layers.l2 import Ether
-            eth_hdr = Ether(frame)
-            self._source_macs.add(eth_hdr.src)
-            self._destination_macs.add(eth_hdr.dst)
-            self._ether_types.add(eth_hdr.type)
+                # Following is for debug only
+                from scapy.layers.l2 import Ether
+                eth_hdr = Ether(frame)
+                self._source_macs.add(eth_hdr.src)
+                self._destination_macs.add(eth_hdr.dst)
+                self._ether_types.add(eth_hdr.type)
 
         except RuntimeError as _e:
             # we observed this happens sometimes right after the _socket was
@@ -211,7 +211,7 @@ elif sys.platform.startswith('linux'):
                 s.settimeout(self.RCV_TIMEOUT)
 
                 if filter is not None:
-                    pass        # TODO: Support BPF
+                    print('TODO: Support compiled BFPs')        # TODO: Support BPF as compiled
 
                 return s
 

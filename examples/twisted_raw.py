@@ -15,18 +15,16 @@
 
 import os
 import sys
-import socketserver
-
 from twisted.internet.defer import inlineCallbacks, returnValue, Deferred
 from twisted.internet import reactor, threads
-from rawsocket.iothread import IOThread
+from rawsocket.iothread import IOThread, BpfProgramFilter
 
 try:
     import sys
     REMOTE_DBG_HOST = '192.168.0.216'
 
-    # sys.path.append('/voltha/voltha/pydevd/pydevd-pycharm.egg')
     import pydevd_pycharm
+
     # Initial breakpoint
     pydevd_pycharm.settrace(REMOTE_DBG_HOST, port=5678, stdoutToServer=True, stderrToServer=True, suspend=False)
 
@@ -75,10 +73,26 @@ class Main(object):
         # Open interface
         # self.io_thread.start()    #  optional as open below starts it if needed
 
-        bpf = None
+        etype = 0x806  # Just arps
+        src_mac = '02:42:6c:f6:a7:2f'
+        dst_mac = '02:42:ac:11:00:02'
+        vlan = 4090
+        tpid = 0x8100
+
+        _bpf_etype = 'ether[12:2] = 0x{:04x}'.format(etype)
+        _bpf_vlan  = 'ether[12:2] = 0x{:04x}'.format(tpid) + ' and ' + \
+                     '(ether[14:2] & 0xfff) = 0x{:03x}'.format(vlan)
+        _bpf_src   = 'ether src host {}'.format(src_mac)
+        _bpf_dst   = 'ether dst host {}'.format(dst_mac)
+
+        # bpf_filter = None
+        # bpf_filter = BpfProgramFilter(_bpf_etype)
+        # bpf_filter = BpfProgramFilter(_bpf_src)
+        bpf_filter = BpfProgramFilter(_bpf_dst)
+        # bpf_filter = BpfProgramFilter(_bpf_vlan)
 
         print(os.linesep + 'Opening interface {}'.format(self.interface), flush=True)
-        reactor.callInThread(self.io_thread.open, self.interface, self.rx_callback)
+        reactor.callInThread(self.io_thread.open, self.interface, self.rx_callback, bpf_filter)
 
         print('sleeping 10 seconds', flush=True)
         _x = yield asleep(10)
