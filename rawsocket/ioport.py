@@ -16,6 +16,7 @@ import os
 import sys
 import socket
 from struct import pack
+from binascii import hexlify
 
 _IOPort = None  # Set later based on O/S platform type
 
@@ -26,7 +27,8 @@ class IOPort(object):
     """
     RCV_SIZE_DEFAULT = 4096
     ETH_P_ALL = 0x03
-    RCV_TIMEOUT = 10000
+    # RCV_TIMEOUT = 10
+    RCV_TIMEOUT = 24 * 3600
     MIN_PKT_SIZE = 60
 
     def __init__(self, iface_name, rx_callback, bpf_filter=None, verbose=False):
@@ -39,9 +41,11 @@ class IOPort(object):
         :param verbose:     (bool) True if verbose, debug output, should be shown
         """
         self._iface_name = iface_name
+        self._mac_address = None
         self._filter = bpf_filter
         self._rx_callback = rx_callback
         self._verbose = verbose
+        self._must_pad = False
 
         # Statistics
         self._rx_frames = 0
@@ -51,22 +55,37 @@ class IOPort(object):
         self._tx_octets = 0
         self._tx_errors = 0
 
-        # TODO: Following are just for debugging and will be removed once BPF operation is verified
-        self._destination_macs = set()
-        self._source_macs = set()
-        self._ether_types = set()
-
         # Open the raw socket
         try:
             self._socket = self._open_socket()
-            
+
         except Exception as _e:
             self._socket = None
             raise
 
+    def __del__(self):
+        self.close()
+
     @staticmethod
     def create(iface_name, rx_callback, bpf_filter=None, verbose=False):
         return _IOPort(iface_name, rx_callback, bpf_filter=bpf_filter, verbose=verbose)
+
+    @property
+    def interface(self):
+        """
+        Get the name of the interface
+        :return: (str) interface name
+        """
+        return self._iface_name
+
+    @property
+    def mac_address(self):
+        """
+        Get MAC Address of port interface
+
+        :return: (bytes) MAC Address (6 octets) or None on failure
+        """
+        return self._mac_address or self._get_mac_address()
 
     def _open_socket(self):
         raise NotImplementedError('to be implemented by derived class')
@@ -74,22 +93,31 @@ class IOPort(object):
     def _rcv_frame(self):
         raise NotImplementedError('to be implemented by derived class')
 
-    def __del__(self):
-        self.close()
-            
+    def _get_mac_address(self):
+        raise NotImplementedError('to be implemented by derived class')
+
     def close(self):
+        """
+        Close the IO Port socket
+        """
         self._rx_callback = None
         sock, self._socket = self._socket, None
 
         if sock is not None:
             try:
                 sock.close()
-                
+
             except Exception as _e:
                 pass
 
     def fileno(self):
-        return self._socket.fileno()
+        """
+        Return the socket's file descriptor
+
+        :return: file descriptor
+        """
+        sock = self._socket
+        return sock.fileno() if sock is not None else None
 
     def recv(self):
         """Called on the select thread when a packet arrives"""
@@ -106,13 +134,6 @@ class IOPort(object):
                 self._rx_octets += len(frame)
                 callback(frame)
 
-                # Following is for debug only
-                from scapy.layers.l2 import Ether
-                eth_hdr = Ether(frame)
-                self._source_macs.add(eth_hdr.src)
-                self._destination_macs.add(eth_hdr.dst)
-                self._ether_types.add(eth_hdr.type)
-
         except RuntimeError as _e:
             # we observed this happens sometimes right after the _socket was
             # attached to a newly created veth interface. So we log it, but
@@ -120,7 +141,15 @@ class IOPort(object):
             return
 
     def send(self, frame):
-        sent_bytes = self.send_frame(frame)
+        """
+        Send a frame on the interface
+
+        :param frame: (bytes) Frame to send
+
+        :return: (int) number of bytes sent, -1 on error
+        """
+        sent_bytes = self._send_frame(frame)
+
         if sent_bytes != len(frame):
             self._tx_errors += 1
         else:
@@ -129,7 +158,17 @@ class IOPort(object):
 
         return sent_bytes
 
-    def send_frame(self, frame):
+    def _pad_frame(self, frame):
+        padding = '\x00' * (self.MIN_PKT_SIZE - len(frame))
+        return frame + padding
+
+    def _send_frame(self, frame):
+        if self._socket is None:
+            return -1
+
+        if self._must_pad and len(frame) < self.MIN_PKT_SIZE:
+            frame = self._pad_frame(frame)
+
         try:
             return self._socket.send(frame)
 
@@ -137,19 +176,33 @@ class IOPort(object):
             import errno
             if err.args[0] == errno.EINVAL:
                 if len(frame) < self.MIN_PKT_SIZE:
-                    padding = '\x00' * (self.MIN_PKT_SIZE - len(frame))
-                    frame = frame + padding
-                    return self._socket.send(frame)
+                    self._must_pad = True
+                    return self._socket.send(self._pad_frame(frame))
             else:
                 raise
 
     def up(self):
+        """
+        Enable the IOPort's interface
+
+        :return: (IOPort) self reference
+        """
         raise NotImplementedError('to be implemented by derived class')
 
     def down(self):
+        """
+        Disable the IOPort's interface
+
+        :return: (IOPort) self reference
+        """
         raise NotImplementedError('to be implemented by derived class')
 
     def statistics(self):
+        """
+        Get rx/tx statistics for the port
+
+        :return: (dict) statistics
+        """
         return {
             'rx_frames': self._rx_frames,
             'rx_octets': self._rx_octets,
@@ -157,11 +210,6 @@ class IOPort(object):
             'tx_frames': self._tx_frames,
             'tx_octets': self._tx_octets,
             'tx_errors': self._tx_errors,
-
-            # Following are just for debugging and will be removed
-            'destination_macs': self._destination_macs,
-            'source_macs': self._source_macs,
-            'etypes': self._ether_types,
         }
 
 
@@ -202,6 +250,10 @@ if sys.platform == 'darwin':
 
         def down(self):
             return self
+
+        def _get_mac_address(self):
+            raise NotImplementedError('TODO: Not yet implemented')
+
 
     _IOPort = DarwinIOPort
 
@@ -255,6 +307,15 @@ elif sys.platform.startswith('linux'):
         def down(self):
             os.system('ip link set {} down'.format(self._iface_name))
             return self
+
+        def _get_mac_address(self):
+            if self._socket is None:
+                return None
+
+            # extract mac address
+            mac = hexlify(self._socket.getsockname()[4])
+            return mac
+
 
     _IOPort = LinuxIOPort
 else:

@@ -13,7 +13,7 @@
 # limitations under the License.
 
 import os
-import time
+import socket
 import pcapy
 import fcntl
 import select
@@ -27,10 +27,10 @@ class IOThread(Thread):
         self._interface = None
         self._stopped = True
         self._verbose = verbose
-        self._port = None
+        self._ports = dict()
+        self._ports_modified = False
         self._cvar = Condition()
         self._waker = _SelectWakerDescriptor()
-        self._rx_callback = None
 
     def __del__(self):
         self._rx_callback = None
@@ -40,40 +40,50 @@ class IOThread(Thread):
         return 'TODO'
 
     @property
-    def interface_name(self):
-        return self._interface
+    def interfaces(self):
+        return [key for key, _ in self._ports]
+
+    def port(self, interface):
+        return self._ports.get(interface)
 
     @property
     def is_running(self):
-        return not self.stopped and self.is_alive()
+        return not self._stopped and self.is_alive()
 
-    def open(self, iface, rx_callback, bpf_filter=None):
-        assert self._port is None, 'Interface already Opened'
+    def open(self, iface, rx_callback, bpf_filter=None, verbose=False, keep_closed=False):
+        assert iface not in self._ports, 'Interface already Opened'
 
-        if bpf_filter is not None:
-            print("TODO: Support compile BPF")  # TODO: Compile and install filter in kernel if possible
-            print("BFP is: '{}'".format(bpf_filter))
-            pass
-
-        self._rx_callback = rx_callback
-        self._port = IOPort.create(iface, rx_callback, bpf_filter=bpf_filter, verbose=self._verbose)
-
-        # devices = pcapy.findalldevs()
-        # self._port = pcapy.open_live(iface, 1600, 1, 10)
-        # net = self._port.getnet()
-
-        self._interface = iface
-
-        if self._port is not None:
+        self._ports[iface] = IOPort.create(iface, rx_callback,
+                                           bpf_filter=bpf_filter,
+                                           verbose=self._verbose or verbose)
+        # Make sure rx thread is running if not suppressed
+        if not keep_closed:
             self.start()
 
+        self._ports_modified = True
+        self._waker.notify()
         return True
 
-    def close(self):
-        port, self._port = self._port, None
-        if port is not None:
-            port.close()
-        return self
+    def close(self, interface=None):
+        port = self._ports.pop(interface, None)
+        if port is None:
+            return False
+
+        port.close()
+        self._ports_modified = True
+        self._waker.notify()
+        return True
+
+    def _close_all(self):
+        ports, self._ports = self._ports, None
+
+        if len(ports):
+            for _, port in ports.items():
+                port.close()
+
+            self._ports_modified = True
+            self._waker.notify()
+        return True
 
     def start(self):
         """
@@ -108,66 +118,69 @@ class IOThread(Thread):
         """
         if not self._stopped:
             self._stopped = True
+            waker, self._waker = self._waker, None
 
-        port, self._port = self._port, None
-        waker, self._waker = self._waker, None
+            self._close_all()
+            if waker is not None:
+                waker.notify()
 
-        if waker is not None:
-            waker.notify()
-
-        if port is not None:
-            port.close()
-
-        if timeout is None or timeout > 0.0:
-            self.join(timeout)
+            if timeout is None or timeout > 0.0:
+                self.join(timeout)
 
         return self
 
-    def send(self, frame):
-        port = self._port
+    def send(self, interface, frame):
+        port = self._ports.get(interface, None)
         if port is not None:
             return port.send(frame)
         return -1
 
     def run(self):
-        # wait for a port to be attached
-        while not self._stopped and self._port is None:
-            time.sleep(0.010)
-
-        port = self._port
-        sockets = [self._waker, port]
-
-        while not self._stopped and self._port is not None:
+        # Outer loop invoked on port change
+        while not self._stopped:
+            fds = [self._waker] + [port for _, port in self._ports.items()]
+            self._ports_modified = False
             empty = []
-            try:
-                # TODO: What is best timeout?
-                _in, _out, _err = select.select(sockets, empty, empty, 10)  # TODO: Reduce timeout to 1
 
-            except Exception as _e:
-                break
+            while not self._stopped:
+                try:
+                    _in, _out, _err = select.select(fds, empty, empty, 1)
 
-            with self._cvar:
-                for fd in _in:
-                    try:
-                        if fd is self._waker:
-                            self._waker.wait()
-                            continue
+                except Exception as _e:
+                    break
 
-                        elif fd is port:
-                            port.recv()
-                        else:
-                            pass    # Stale port or waker, may be shutting down
+                except socket.timeout:
+                    if self._verbose:
+                        print('Timeout')
+                    break
 
-                        self._cvar.notify_all()
+                with self._cvar:
+                    for fd in _in:
+                        try:
+                            if fd is self._waker:
+                                self._waker.wait()
+                                continue
 
-                    except Exception as _e:
-                        pass
+                            elif isinstance(fd, IOPort):
+                                fd.recv()
+
+                            else:
+                                pass  # Stale port or waker, may be shutting down
+
+                            self._cvar.notify_all()
+
+                        except Exception as _e:
+                            pass  # for debug purposes
+
+                    if self._ports_modified:
+                        break
 
         if self._verbose:
             print(os.linesep + 'exiting background I/O thread', flush=True)
 
-    def statistics(self):
-        return self._port.statistics() if self._port is not None else None
+    def statistics(self, interface):
+        port = self._ports.get(interface)
+        return port.statistics() if port is not None else None
 
 
 class _SelectWakerDescriptor(object):
