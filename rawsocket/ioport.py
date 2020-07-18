@@ -71,7 +71,7 @@ class IOPort(object):
         return _IOPort(iface_name, rx_callback, bpf_filter=bpf_filter, verbose=verbose)
 
     @property
-    def interface(self):
+    def name(self):
         """
         Get the name of the interface
         :return: (str) interface name
