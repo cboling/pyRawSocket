@@ -1,0 +1,3 @@
+include requirements.txt LICENSE VERSION README.md
+recursive-include rawsocket
+recursive-exclude test
