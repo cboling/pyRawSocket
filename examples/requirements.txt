@@ -14,4 +14,4 @@
 
 -r ../requirements.txt
 
-twisted == 20.3.0
+twisted == 22.2.0
