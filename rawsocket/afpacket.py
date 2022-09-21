@@ -22,7 +22,6 @@ the VLAN tag if it was offloaded.
 """
 
 import struct
-from ctypes import *
 
 ETH_P_8021Q = 0x8100
 SOL_PACKET = 263

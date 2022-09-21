@@ -293,9 +293,8 @@ elif sys.platform.startswith('linux'):
 
                 return s
 
-            except Exception as e:
-                pass
-                raise
+            except Exception as _e:
+                raise       # here primarily for debugging / breakpoint purposes
 
         def _rcv_frame(self):
             return recv(self._socket, self.RCV_SIZE_DEFAULT)

@@ -49,8 +49,7 @@ def interface_ioctl(iface, ioctl_cmd, sock=None):
         ifreq = ioctl(s, ioctl_cmd, pack("16s16x", str(iface).encode('utf-8')))
 
     except Exception as _e:
-        pass    # Primarily here for placement of a debug breakpoint
-        raise
+        raise   # Primarily here for placement of a debug breakpoint
 
     finally:
         if sock is None:
@@ -74,8 +73,7 @@ def get_if_index(iface, sock=None):
         return index
 
     except Exception as _e:
-        pass    # Primarily here for placement of a debug breakpoint
-        raise
+        raise   # Primarily here for placement of a debug breakpoint
 
 
 def set_promiscuous_mode(sock, iface, enable=True):

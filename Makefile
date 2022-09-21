@@ -19,12 +19,15 @@ include setup.mk
 
 # Variables
 VERSION           ?= $(shell cat ../VERSION)
+WORKING_DIR		  := $(dir $(THIS_MAKEFILE) )
+PACKAGE_DIR       := $(WORKING_DIR).
+TEST_DIR          := $(WORKING_DIR)test
 DOCKER_BUILD_ARGS := --rm --force-rm
+PYVERSION         ?= ${PYVERSION:-"3.8"}
+PYTHON            := python${PYVERSION}
 VENVDIR           := venv
-TESTVENVDIR       := ${VENVDIR}-tests
+TESTVENVDIR       := ${VENVDIR}-test
 EXVENVDIR         := ${VENVDIR}-examples
-VENV_BIN          ?= virtualenv
-VENV_OPTS         ?= --python=python3.6 -v
 
 # ignore these directories
 .PHONY: test dist examples
@@ -58,10 +61,17 @@ upload: dist
 	@ echo "Uploading sdist to test.pypi.org"
 	twine upload --repository-url https://test.pypi.org/legacy/ dist/*
 
-venv: distclean
-	virtualenv --python=python3.6 ${VENVDIR};\
-    source ./${VENVDIR}/bin/activate ; set -u ;\
-    pip install -r requirements.txt
+
+venv: $(PACKAGE_DIR)/requirements.txt $(VENVDIR)/.built
+
+venv-sudo: $(PACKAGE_DIR)/requirements.txt $(VENVDIR)/.built
+	if [ "$$(realpath ${VENVDIR}/bin/python)" != "${PWD}/${VENVDIR}/bin/python" ]; then \
+     mv ${VENVDIR}/bin/python ${VENVDIR}/bin/python.old && \
+     cp $$(realpath ${VENVDIR}/bin/python.old) ${VENVDIR}/bin/python && \
+     sudo setcap cap_net_raw,cap_net_admin,cap_sys_admin,cap_dac_override=eip ${VENVDIR}/bin/python; fi
+
+venv-test: $(TEST_DIR)/requirements.txt $(TESTVENVDIR)/.built
+	@ echo "TEST_DIR is ${TEST_DIR}"
 
 clean:
 	@ -rm -rf .tox *.egg-info
@@ -81,6 +91,14 @@ docker:
 run-as-root: # pipdocker
 	docker run -i --name=twisted_raw --rm -v ${PWD}:/pyrawsocket --privileged pyrawsocket:latest env PYTHONPATH=/pyrawsocket python /pyrawsocket/examples/twisted_raw.py
 
+$(VENVDIR)/.built:
+	@ ${PYTHON} -m venv ${VENVDIR}
+	@ (source ${VENVDIR}/bin/activate && \
+	    if python -m pip install --disable-pip-version-check -r $(PACKAGE_DIR)/requirements.txt; \
+	    then \
+	        uname -s > ${VENVDIR}/.built; \
+	    fi)
+
 ######################################################################
 # Example venv support
 
@@ -95,10 +113,14 @@ venv-examples:
 COVERAGE_OPTS=--with-xcoverage --with-xunit --cover-package=rawsocket\
               --cover-html --cover-html-dir=tmp/cover
 
-venv-test:
-	@ $(VENV_BIN) ${VENV_OPTS} ${TESTVENVDIR};\
-        source ./${TESTVENVDIR}/bin/activate ; set -u ;\
-        pip install -r test/requirements.txt
+$(TESTVENVDIR)/.built:
+	@ ${PYTHON} -m venv ${TESTVENVDIR}
+	@ (source ${TESTVENVDIR}/bin/activate && \
+	    if python -m  pip install --disable-pip-version-check -r ${TEST_DIR}/requirements.txt; \
+	    then \
+	        python -m pip install --disable-pip-version-check pylint; \
+	        uname -s > ${TESTVENVDIR}/.built; \
+	    fi)
 
 # TODO: Add support for tox later
 #test:
